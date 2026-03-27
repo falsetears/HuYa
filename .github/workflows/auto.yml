@@ -1,0 +1,73 @@
+name: 虎牙虎粮自动发放
+
+on:
+  schedule:
+    - cron: '1 16 * * *'  # 北京时间 00:01
+  workflow_dispatch:
+    inputs:
+      rooms:
+        description: '房间号，逗号分隔'
+        required: false
+        default: ''
+
+jobs:
+  send-hl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 缓存 Python 依赖（超级提速）
+      - name: 缓存 Python 依赖
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # ==============================================
+      # ✅ 关键：只装虚拟桌面，不装整个 GNOME 桌面！
+      # ==============================================
+      - name: 安装虚拟显示
+        run: sudo apt-get install -y xvfb
+
+      # 安装依赖
+      - name: 安装 Python 包
+        run: pip install -r requirements.txt
+
+      # 检查 Cookie
+      - name: 检查 HUYA_COOKIE
+        run: |
+          if [ -z "${{ secrets.HUYA_COOKIE }}" ]; then
+            echo "❌ 未配置 HUYA_COOKIE"
+            exit 1
+          fi
+
+      # 获取房间号
+      - name: 获取房间号
+        id: get-rooms
+        run: |
+          if [ -n "${{ github.event.inputs.rooms }}" ]; then
+            echo "rooms=${{ github.event.inputs.rooms }}" >> $GITHUB_OUTPUT
+          else
+            if [ -z "${{ secrets.HUYA_ROOMS }}" ]; then
+              echo "❌ 未配置 HUYA_ROOMS"
+              exit 1
+            fi
+            echo "rooms=${{ secrets.HUYA_ROOMS }}" >> $GITHUB_OUTPUT
+          fi
+
+      # ==============================================
+      # ✅ 启动虚拟桌面 + 运行脚本（GitHub 自带 Chrome，不用装！）
+      # ==============================================
+      - name: 运行虎粮发放
+        env:
+          HUYA_COOKIE: ${{ secrets.HUYA_COOKIE }}
+          HUYA_ROOMS: ${{ steps.get-rooms.outputs.rooms }}
+          HEADLESS: "true"
+        run: |
+          xvfb-run -a python main.py
