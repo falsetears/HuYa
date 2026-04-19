@@ -69,22 +69,35 @@ class HuYaAuto:
         if not self.debug:
             chrome_options.add_argument('--headless=new')
 
+        # --- 针对 GitHub Actions 的稳定性强化 ---
         chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-
-        chrome_options.add_argument('--disable-images')
-        chrome_options.add_argument('--disable-javascript=false')
+        chrome_options.add_argument('--disable-dev-shm-usage') # 解决 Linux 下内存共享问题
+        chrome_options.add_argument('--disable-gpu')           # 禁用 GPU
+        
+        # --- 极速瘦身：阻止视频、音频和图片加载 ---
+        chrome_options.add_argument('--mute-audio')           # 静音（减少音频流处理）
+        chrome_options.add_argument('--blink-settings=imagesEnabled=false') # 禁图
+        # 禁用 WebRTC，防止尝试建立视频链接耗费资源
+        chrome_options.add_argument('--disable-webrtc') 
+        
+        # 页面加载策略：只要 DOM 树加载完就继续，不等资源（图片、视频）加载完
+        chrome_options.page_load_strategy = 'eager' 
+        # ---------------------------------------
 
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
-        chrome_options.add_argument('--window-size=1920,1080')
+        chrome_options.add_argument('--window-size=1280,720') # 减小窗口大小
 
         print("[START] 启动浏览器")
         driver = webdriver.Chrome(
             service=Service(ChromeDriverManager().install()),
             options=chrome_options
         )
+        
+        # 设置超时时间，避免无限期挂起
+        driver.set_page_load_timeout(60) 
+        
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         return driver
 
