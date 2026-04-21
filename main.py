@@ -9,7 +9,6 @@ import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -20,15 +19,16 @@ import config as cfg
 
 class HuYaAuto:
     def __init__(self):
-        # 调试开关：本地测试设为 True，Action 环境设为 False
         self.debug = False
         self.msg_logs = []
+        
+        # 1. 按照要求，默认关闭推送开关
+        self.enable_push = False  
         
         # 环境变量获取
         self.cookie = os.getenv('HUYA_COOKIE', '').strip()
         self.rooms = self._parse_rooms(os.getenv('HUYA_ROOMS', ''))
         self.send_key = os.getenv('SEND_KEY', '').strip()
-        self.enable_push = True if self.send_key else False
 
         if not self.cookie:
             print("[ERROR] 未设置 HUYA_COOKIE"); sys.exit(1)
@@ -54,7 +54,6 @@ class HuYaAuto:
         if not self.debug:
             chrome_options.add_argument('--headless=new')
         
-        # 基础防检测与性能优化
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
@@ -68,20 +67,26 @@ class HuYaAuto:
         print("[START] 启动浏览器")
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
         driver.set_page_load_timeout(50)
-        # 注入防检测脚本
+        # 防检测注入
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         return driver
 
     def send_notification(self):
-        """推送逻辑：与现脚本结果一致"""
-        if not self.enable_push or not self.send_key or not self.msg_logs: return
+        """推送逻辑"""
+        # 严格遵守开关状态
+        if not self.enable_push or not self.send_key:
+            return
+            
+        if not self.msg_logs:
+            return
+
         try:
             content = "\n\n".join(self.msg_logs)
             url = f'https://sctapi.ftqq.com/{self.send_key}.send'
             requests.post(url, data={'text': '虎牙任务报告', 'desp': content}, timeout=10)
             print("[PUSH] 通知已发送")
-        except Exception as e:
-            print(f"[PUSH] 通知发送失败: {e}")
+        except:
+            pass
 
     def login(self):
         print("[LOGIN] 正在登录...")
@@ -106,7 +111,7 @@ class HuYaAuto:
             return False
 
     def get_hl_count(self):
-        """保留原脚本的高强度 JS 查询逻辑"""
+        """原脚本优秀的异步轮询查找逻辑"""
         print("[SEARCH] 正在查询虎粮数量...")
         self.driver.get(cfg.URLS["pay_index"])
         time.sleep(3)
@@ -114,10 +119,8 @@ class HuYaAuto:
             pack_tab = self.wait.until(EC.element_to_be_clickable((By.ID, cfg.PAY_PAGE["pack_tab"])))
             self.driver.execute_script("arguments[0].click();", pack_tab)
         except:
-            print("[WARN] 点击背包页签失败")
             return 0
 
-        # 原脚本优秀的轮询查找逻辑
         n = self.driver.execute_script('''
             let maxWait = 20;
             async function findHuliang() {
@@ -142,7 +145,7 @@ class HuYaAuto:
         return count
 
     def send_to_room_in_situ(self, count):
-        """原地送礼逻辑：结合 JS 强制填入，解决 Headless 遮挡"""
+        """结合 JS 填入，解决 Headless 模式下的悬停难题"""
         if count <= 0: return "无粮跳过"
         try:
             # 1. 点击包裹
@@ -151,20 +154,19 @@ class HuYaAuto:
             time.sleep(2)
 
             # 2. 选中虎粮
-            hl_item = self.wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'm-gift-item')]//p[text()='虎粮']/..")))
+            hl_xpath = "//div[contains(@class, 'm-gift-item')]//p[text()='虎粮']/.."
+            hl_item = self.wait.until(EC.presence_of_element_located((By.XPATH, hl_xpath)))
             self.driver.execute_script("arguments[0].click();", hl_item)
             time.sleep(1)
 
-            # 3. JS 强制填入数量并触发事件
-            success = self.driver.execute_script(f'''
+            # 3. JS 强制赋值数量并触发事件
+            self.driver.execute_script(f'''
                 var input = document.querySelector("input.z-cur[placeholder='自定义']");
                 if (input) {{
                     input.value = "{count}";
                     input.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    return true;
                 }}
-                return false;
             ''')
             
             # 4. 点击赠送按钮
@@ -173,14 +175,14 @@ class HuYaAuto:
             time.sleep(2)
             
             return f"🚀 送出 {count} 个"
-        except Exception as e:
+        except Exception:
             return "❌ 送礼失败"
 
     def daily_check_in(self):
         """现脚本打卡逻辑"""
         try:
             badge = self.wait.until(EC.presence_of_element_located((By.CLASS_NAME, "FanClubHd--UAIAw8vo8FGSKqVwLp7A")))
-            # JS 模拟悬停，防止 Headless 失效
+            # JS 模拟悬停，防止无头模式失效
             self.driver.execute_script("var e=document.createEvent('MouseEvents');e.initMouseEvent('mouseover',true,false,window,0,0,0,0,0,false,false,false,false,0,null);arguments[0].dispatchEvent(e);", badge)
             time.sleep(2.5)
             btn = self.wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(@class, 'Btn--giEMQ9MN7LbLqKHP79BQ') and contains(text(), '打卡')]")))
@@ -194,7 +196,6 @@ class HuYaAuto:
         print("[HUYA] 虎牙虎粮任务启动")
         print("=" * 40)
         
-        success_any = False
         try:
             if not self.login(): return False
             
@@ -202,13 +203,12 @@ class HuYaAuto:
             n_rooms = len(self.rooms)
             
             for i, rid in enumerate(self.rooms):
-                # 计算分配数量
                 num = (total_hl // n_rooms + (1 if i < (total_hl % n_rooms) else 0)) if total_hl > 0 else 0
-                print(f"\n>>> 房间: {rid} (任务: 送礼{num} + 打卡)")
+                print(f"\n>>> 房间: {rid} (分配: {num})")
                 
                 try:
                     self.driver.get(cfg.URLS["room_base"].format(rid))
-                    time.sleep(10) # 保证直播间组件加载
+                    time.sleep(10) 
                     
                     g_res = self.send_to_room_in_situ(num)
                     c_res = self.daily_check_in()
@@ -216,19 +216,19 @@ class HuYaAuto:
                     res_msg = f"{g_res}； {c_res} (房间 {rid})"
                     print(f"结果: {res_msg}")
                     self.msg_logs.append(res_msg)
-                    success_any = True
                 except Exception:
                     self.msg_logs.append(f"❌ 房间 {rid} 异常")
                 
                 time.sleep(2)
                 
             print(f"\n[DONE] 流程结束")
-            return success_any
+            return True
 
         finally:
             if hasattr(self, 'driver'):
                 self.driver.quit()
                 print("[EXIT] 浏览器已关闭")
+            # 只有开关为 True 时才会推送
             self.send_notification()
 
 if __name__ == '__main__':
