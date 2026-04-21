@@ -22,7 +22,6 @@ class HuYaAuto:
     def __init__(self):
         self.debug = ""
         self.msg_logs = []
-        # --- 推送控制开关 ---
         self.enable_push = False 
         
         self.cookie = os.getenv('HUYA_COOKIE', '').strip()
@@ -46,25 +45,20 @@ class HuYaAuto:
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--mute-audio')
-        # 仅禁用图片，保留CSS以维持布局稳定
         chrome_options.add_experimental_option("prefs", {"profile.managed_default_content_settings.images": 2})
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_argument('--window-size=1920,1080')
         
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        # 设定较短的页面加载超时，防止首个房间卡死 GitHub Actions
-        driver.set_page_load_timeout(35)
+        driver.set_page_load_timeout(40)
         return driver
 
     def send_notification(self):
-        # 只有开关开启且有 key 时才发送
-        if not self.enable_push or not self.send_key or not self.msg_logs: 
-            return
+        if not self.enable_push or not self.send_key or not self.msg_logs: return
         try:
             content = "\n\n".join(self.msg_logs)
             requests.post(f'https://sctapi.ftqq.com/{self.send_key}.send', 
                           data={'text': '虎牙任务报告', 'desp': content}, timeout=10)
-            print("✅ 微信推送完成")
         except: pass
 
     def login(self):
@@ -89,7 +83,7 @@ class HuYaAuto:
             time.sleep(5)
             btn = self.wait.until(EC.element_to_be_clickable((By.ID, cfg.PAY_PAGE["pack_tab"])))
             self.driver.execute_script("arguments[0].click();", btn)
-            time.sleep(2)
+            time.sleep(3)
             n = self.driver.execute_script('''
                 const items = document.querySelectorAll('li[data-num]');
                 for (let item of items) {
@@ -115,34 +109,55 @@ class HuYaAuto:
     def send_to_room(self, count):
         if count <= 0: return "无粮跳过"
         try:
+            # 等待 body 属性加载
+            time.sleep(3)
             lp = self.driver.execute_script('return document.body.getAttribute("data-lp")')
             gid = self.driver.execute_script('return document.body.getAttribute("data-gid")')
-            self.driver.get(cfg.URLS["gift_tab"].format(lp=lp, gid=gid))
-            time.sleep(4)
             
+            if not lp or not gid:
+                print("[WARN] 无法从 body 获取参数，尝试等待渲染...")
+                time.sleep(5)
+                lp = self.driver.execute_script('return document.body.getAttribute("data-lp")')
+                gid = self.driver.execute_script('return document.body.getAttribute("data-gid")')
+
+            if not lp or not gid: return "❌ 获取房参失败"
+
+            # 切换到礼物面板页
+            self.driver.get(cfg.URLS["gift_tab"].format(lp=lp, gid=gid))
+            time.sleep(5)
+            
+            # 找到虎粮
             items = self.wait.until(EC.presence_of_all_elements_located((By.CLASS_NAME, cfg.GIFT["item_class"])))
             hl = next((i for i in items if "虎粮" in i.text), None)
-            if not hl: return "❌ 没找到虎粮"
+            if not hl: return "❌ 未发现虎粮"
 
+            # 模拟悬停激活输入框
             ActionChains(self.driver).move_to_element(hl).perform()
-            inp = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, cfg.GIFT["input_css"])))
+            time.sleep(1)
             
-            # 强化写入：确保 React 状态同步
+            inp = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, cfg.GIFT["input_css"])))
             inp.click()
             inp.send_keys(Keys.CONTROL + "a")
             inp.send_keys(Keys.BACKSPACE)
+            
             self.driver.execute_script("""
                 arguments[0].value = arguments[1];
                 arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
                 arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
             """, inp, str(count))
-            time.sleep(1)
-
-            self.driver.find_element(By.CLASS_NAME, cfg.GIFT["send_class"]).click()
             time.sleep(1.5)
-            self.wait.until(EC.element_to_be_clickable((By.CLASS_NAME, cfg.GIFT["confirm_class"]))).click()
+
+            # 点击赠送
+            send_btn = self.driver.find_element(By.CLASS_NAME, cfg.GIFT["send_class"])
+            self.driver.execute_script("arguments[0].click();", send_btn)
+            
+            # 点击确定
+            confirm = self.wait.until(EC.element_to_be_clickable((By.CLASS_NAME, cfg.GIFT["confirm_class"])))
+            self.driver.execute_script("arguments[0].click();", confirm)
             return f"🚀 送出 {count} 个"
-        except: return "❌ 送礼失败"
+        except Exception as e:
+            print(f"[DEBUG] 送礼出错详细: {str(e)[:50]}")
+            return "❌ 送礼超时"
 
     def run(self):
         try:
@@ -151,23 +166,26 @@ class HuYaAuto:
             
             n = len(self.rooms)
             for i, rid in enumerate(self.rooms):
-                # 重新计算该房间应得数量，确保分配逻辑不偏移
                 num = (total_hl // n + (1 if i < (total_hl % n) else 0)) if total_hl > 0 else 0
-                print(f"\n>>> 处理房间: {rid} (分配数量: {num})")
+                print(f"\n>>> 房间: {rid} (分配: {num})")
                 
                 try:
                     self.driver.get(cfg.URLS["room_base"].format(rid))
                     time.sleep(8)
                     
                     g_res = self.send_to_room(num)
+                    # 重新刷新一下房间页面进行打卡，防止送礼页面跳转破坏结构
+                    if "🚀" in g_res:
+                        self.driver.get(cfg.URLS["room_base"].format(rid))
+                        time.sleep(5)
+                    
                     c_res = self.daily_check_in()
                     
                     msg = f"{g_res}； {c_res} (房间 {rid})"
                     print(f"结果: {msg}")
                     self.msg_logs.append(msg)
-                except Exception as e:
-                    print(f"[ERR] 房间 {rid} 运行异常")
-                    self.msg_logs.append(f"❌ 房间 {rid} 任务失败")
+                except:
+                    self.msg_logs.append(f"❌ 房间 {rid} 失败")
         finally:
             if hasattr(self, 'driver'): self.driver.quit()
             self.send_notification()
