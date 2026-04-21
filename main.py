@@ -9,7 +9,6 @@ import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -32,7 +31,7 @@ class HuYaAuto:
             print("[ERROR] 未设置 HUYA_COOKIE"); sys.exit(1)
         
         self.driver = self._init_browser()
-        self.wait = WebDriverWait(self.driver, 20)
+        self.wait = WebDriverWait(self.driver, 15)
 
     def _parse_rooms(self, rooms_str):
         if not rooms_str: return [518512, 518511]
@@ -50,14 +49,14 @@ class HuYaAuto:
         chrome_options.add_argument('--window-size=1920,1080')
         
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        driver.set_page_load_timeout(60)
+        driver.set_page_load_timeout(50)
         return driver
 
     def login(self):
         print("[LOGIN] 正在登录...")
         try:
             self.driver.get(cfg.URLS["user_index"])
-            time.sleep(3)
+            time.sleep(2)
             for line in self.cookie.split(';'):
                 if '=' not in line: continue
                 name, val = line.split('=', 1)
@@ -72,10 +71,10 @@ class HuYaAuto:
         print("[SEARCH] 正在查询虎粮数量...")
         try:
             self.driver.get(cfg.URLS["pay_index"])
-            time.sleep(6)
+            time.sleep(5)
             btn = self.wait.until(EC.presence_of_element_located((By.ID, cfg.PAY_PAGE["pack_tab"])))
             self.driver.execute_script("arguments[0].click();", btn)
-            time.sleep(4)
+            time.sleep(3)
             n = self.driver.execute_script('''
                 const items = document.querySelectorAll('li[data-num]');
                 for (let item of items) {
@@ -89,43 +88,43 @@ class HuYaAuto:
         except: return 0
 
     def send_to_room_in_situ(self, count):
-        """按照用户提供的流程：点击包裹 -> 悬停虎粮 -> 输入数量 -> 点击赠送"""
+        """优化后的送礼：JS 强制显式化流程"""
         if count <= 0: return "无粮跳过"
         try:
-            # 1. 点击包裹 (ID: player-package-btn)
+            # 1. 点击包裹
             pack_btn = self.wait.until(EC.element_to_be_clickable((By.ID, "player-package-btn")))
             self.driver.execute_script("arguments[0].click();", pack_btn)
             time.sleep(2)
 
-            # 2. 鼠标移动到虎粮获得送礼悬浮窗
+            # 2. 选中虎粮 (通过 JS 点击，确保选中状态)
             hl_item = self.wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'm-gift-item')]//p[text()='虎粮']/..")))
-            actions = ActionChains(self.driver)
-            actions.move_to_element(hl_item).perform() # 执行悬停
-            time.sleep(1.5)
+            self.driver.execute_script("arguments[0].click();", hl_item)
+            time.sleep(1)
 
-            # 3. 自定义输入框中输入数量 (class: z-cur, placeholder: 自定义)
-            try:
-                num_input = self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.z-cur[placeholder='自定义']")))
-                # 使用 JS 清空并输入，或者常规 send_keys
-                num_input.click()
-                num_input.send_keys(Keys.CONTROL + "a")
-                num_input.send_keys(Keys.BACKSPACE)
-                num_input.send_keys(str(count))
-                time.sleep(0.5)
-            except Exception as e:
-                print(f"  [DEBUG] 输入数量失败: {str(e)[:30]}")
+            # 3. 使用 JS 强制填入数量
+            # 逻辑：强行寻找输入框，即使它被隐藏了也直接修改其 value
+            success = self.driver.execute_script(f'''
+                var input = document.querySelector("input.z-cur[placeholder='自定义']");
+                if (input) {{
+                    input.value = "{count}";
+                    // 触发 input 事件让页面感知到数值变化
+                    input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    return true;
+                }}
+                return false;
+            ''')
+            
+            if success:
+                print(f"  [DEBUG] JS 已成功填入数量: {count}")
+            else:
+                print("  [DEBUG] JS 未能定位到输入框")
 
-            # 4. 点击赠送 (class: c-send)
+            # 4. 点击赠送
             send_btn = self.wait.until(EC.element_to_be_clickable((By.CLASS_NAME, "c-send")))
             self.driver.execute_script("arguments[0].click();", send_btn)
+            time.sleep(2)
             
-            # 5. 额外保底：点击可能出现的“确定”按钮
-            try:
-                time.sleep(1)
-                confirm = self.driver.find_element(By.XPATH, "//button[text()='确定'] | //div[contains(@class, 'confirm')]")
-                self.driver.execute_script("arguments[0].click();", confirm)
-            except: pass
-                
             return f"🚀 送出 {count} 个"
         except Exception as e:
             print(f"  [DEBUG] 送礼过程异常: {str(e)[:50]}")
@@ -135,7 +134,7 @@ class HuYaAuto:
         try:
             badge = self.wait.until(EC.presence_of_element_located((By.CLASS_NAME, "FanClubHd--UAIAw8vo8FGSKqVwLp7A")))
             self.driver.execute_script("var e=document.createEvent('MouseEvents');e.initMouseEvent('mouseover',true,false,window,0,0,0,0,0,false,false,false,false,0,null);arguments[0].dispatchEvent(e);", badge)
-            time.sleep(2.5)
+            time.sleep(2)
             btn = self.wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(@class, 'Btn--giEMQ9MN7LbLqKHP79BQ') and contains(text(), '打卡')]")))
             self.driver.execute_script("arguments[0].click();", btn)
             return "✅ 打卡成功"
@@ -146,27 +145,25 @@ class HuYaAuto:
             if not self.login(): return
             total_hl = self.get_hl_count()
             
-            n = len(self.rooms)
             for i, rid in enumerate(self.rooms):
+                n = len(self.rooms)
                 num = (total_hl // n + (1 if i < (total_hl % n) else 0)) if total_hl > 0 else 0
                 print(f"\n>>> 房间: {rid} (分配: {num})")
                 
                 try:
                     self.driver.get(cfg.URLS["room_base"].format(rid))
-                    time.sleep(12) 
+                    time.sleep(10) 
                     
-                    # 按照用户要求顺序执行
                     g_res = self.send_to_room_in_situ(num)
                     c_res = self.daily_check_in()
                     
                     msg = f"{g_res}； {c_res} (房间 {rid})"
                     print(f"结果: {msg}")
                     self.msg_logs.append(msg)
-                except Exception as e:
+                except:
                     self.msg_logs.append(f"❌ 房间 {rid} 异常")
         finally:
             if hasattr(self, 'driver'): self.driver.quit()
-            print("\n[EXIT] 任务结束")
 
 if __name__ == '__main__':
     HuYaAuto().run()
