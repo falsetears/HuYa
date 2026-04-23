@@ -103,6 +103,11 @@ on:
 
 ---
 
+## ✉️ 推送结果
+<img width="1439" height="697" alt="image" src="https://github.com/user-attachments/assets/6ab4b08b-6553-4b49-9998-386fbf7c94ad" />
+
+---
+
 ## ⚠️ 重要提醒
 - 请勿分享 Cookie，避免账号被盗
 - Cookie 过期后重新获取更新即可
